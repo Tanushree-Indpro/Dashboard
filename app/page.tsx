@@ -1,3 +1,10 @@
+/*
+  File: app/page.tsx
+  Highlights:
+  - CHANGED (Line 217): Added new logic to sort versions and find the *true* latest version.
+  - CHANGED (Line 256): Added 'relative z-10' to fix CSS stacking issue.
+*/
+
 'use client';
 
 import React, { useMemo, useState } from 'react';
@@ -15,6 +22,7 @@ import {
   TrendingUp,
   CheckCircle,
   Archive,
+  Database,
 } from 'lucide-react';
 
 // ---------- Types ----------
@@ -98,7 +106,6 @@ const getVersionBasedHealth = (
 
   // A project is considered Critical if:
   if (progress < 40 || blocked >= 5) status = 'Critical';
-
   else if (progress < 70 || blocked >= 2) status = 'At Risk';
 
   return { status, progress, totalProjectIssues, blocked, versionFixed, versionTotal };
@@ -193,9 +200,29 @@ export default function Home() {
     return projects.map((p, i) => {
       const taskData = tasksArray?.[i] ?? { total: 0, counts: {} };
       const versions: JiraVersion[] = versionsArray?.[i] ?? [];
-      const latestVersion = versions.length
-        ? versions[versions.length - 1]
+      
+      // --- FIX 2: ROBUST VERSION SORTING ---
+      // Filter out archived versions and sort by release/start date
+      // to find the most recent, relevant version.
+      const sortedVersions = versions
+        .filter((v) => v.status !== 'Archived')
+        .sort((a, b) => {
+          const dateA = a.releaseDate || a.startDate;
+          const dateB = b.releaseDate || b.startDate;
+          if (dateA && dateB) {
+            return new Date(dateA).getTime() - new Date(dateB).getTime();
+          }
+          if (dateA) return 1; // Versions with dates are "later"
+          if (dateB) return -1;
+          return a.name.localeCompare(b.name); // Fallback to name sort
+        });
+
+      // The latest version is the last one in the sorted list
+      const latestVersion = sortedVersions.length
+        ? sortedVersions[sortedVersions.length - 1]
         : undefined;
+      // --- END OF FIX ---
+      
       const userList: JiraUser[] = usersArray?.[i] ?? [];
       const members = userList.length;
       const health = getVersionBasedHealth(taskData, latestVersion);
@@ -273,7 +300,9 @@ export default function Home() {
       </nav>
 
       {/* Main Content */}
-      <div className="max-w-[1400px] mx-auto px-6 lg:px-8 py-8">
+      {/* --- FIX 1: LAYOUT/STACKING FIX --- */}
+      {/* Added 'relative z-10' to ensure this content block renders 'on top' of the z-0 background logo */}
+      <div className="max-w-[1400px] mx-auto px-6 lg:px-8 py-8 relative z-10">
         {/* Header */}
         <header className="mb-8">
           <div className="flex items-start justify-between mb-6">
@@ -491,6 +520,10 @@ export default function Home() {
 
                       {/* Latest Version Block */}
                       <div className="mt-4 pt-3 border-t border-gray-100 text-sm text-slate-600">
+                        {/* --- "Releases" HEADING --- */}
+                        <h4 className="text-xs font-semibold uppercase text-gray-400 mb-2">
+                          Releases
+                        </h4>
                         {latest ? (
                           <Link
                             href={`/projects/${p.key}/versions/${latest.id}`}
@@ -521,6 +554,11 @@ export default function Home() {
                           </div>
                         )}
                       </div>
+
+                      {/* --- "Other Project Details" HEADING --- */}
+                      <h4 className="text-xs font-semibold uppercase text-gray-400 mb-3 pt-4 border-t border-gray-100">
+                        Other Project Details
+                      </h4>
 
                       {/* Progress Bar */}
                       <div className="mt-4">
@@ -578,15 +616,19 @@ export default function Home() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs text-gray-500">Risks</p>
-                          <p className="text-xs font-medium text-gray-900">
-                            {blocked}
-                          </p>
-                        </div>
+                      
+                      {/* --- "Data Collection" BUTTON --- */}
+                      <div className="flex items-center">
+                        <Link
+                          href={`/projects/${p.key}/issues`}
+                          className="flex items-center justify-center gap-1.5 w-full text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 p-2.5 rounded-lg transition-colors"
+                        >
+                          <Database className="w-3.5 h-3.5" />
+                          <span>Data Collection</span>
+                        </Link>
                       </div>
+                      {/* --- END OF CHANGE --- */}
+
                     </div>
                   </article>
                 </motion.div>

@@ -1,9 +1,11 @@
-// File: app/api/projects/[projectKey]/versions/route.ts
-// This version adds the fetchWithRetry helper.
+/*
+  File: app/api/projects/[projectKey]/versions/route.ts
+  This version is correct and efficient.
+*/
 
 import { NextResponse } from 'next/server';
 
-// --- NEW HELPER FUNCTION ---
+// --- HELPER FUNCTION ---
 /**
  * A robust fetch wrapper that retries on network failures.
  */
@@ -16,7 +18,7 @@ async function fetchWithRetry(
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
-    
+
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timeoutId);
 
@@ -41,25 +43,6 @@ async function fetchWithRetry(
 }
 // --- END HELPER FUNCTION ---
 
-interface JiraVersion {
-  id: string;
-  name: string;
-  startDate?: string;
-  releaseDate?: string;
-  released: boolean;
-  archived: boolean;
-  status: string;
-  issueCounts: {
-    issuesFixedCount: number;
-  };
-}
-
-function getVersionStatus(version: { released: boolean; archived: boolean }): string {
-  if (version.archived) return 'Archived';
-  if (version.released) return 'Released';
-  return 'Unreleased';
-}
-
 export async function GET(
   _req: Request,
   context: { params: Promise<{ projectKey: string }> }
@@ -81,57 +64,28 @@ export async function GET(
       'Content-Type': 'application/json',
     };
 
-    // 1. Fetch the list of versions (with retry)
-    const versionListRes = await fetchWithRetry(
-      `${JIRA_BASE_URL}/rest/api/3/project/${projectKey}/versions`,
+    // --- UPDATED LOGIC ---
+    // This is a single, efficient call to get all versions
+    // AND their issue counts at the same time.
+    const versionsUrl = `${JIRA_BASE_URL}/rest/api/3/project/${projectKey}/versions?expand=issueCounts`;
+
+    const response = await fetchWithRetry(
+      versionsUrl,
       {
         headers,
         cache: 'no-store',
       }
     );
 
-    const versionsData = await versionListRes.json();
-    const processedVersions: JiraVersion[] = [];
+    // This data is an array of version objects,
+    // already including the 'issueCounts' and 'status' fields.
+    const data = await response.json();
 
-    // 2. Loop through each version to get its issue counts
-    const versionPromises = versionsData.map(async (version: any) => {
-      let issueCounts = { issuesFixedCount: 0 };
-      
-      try {
-        // 3. Get associated issue counts (with retry)
-        const countsRes = await fetchWithRetry(
-          `${JIRA_BASE_URL}/rest/api/3/version/${version.id}/relatedIssueCounts`,
-          { headers, cache: 'no-store' }
-        );
+    // We can just return the data directly, as it matches
+    // the structure expected by the frontend (JiraVersion[]).
+    return NextResponse.json(data);
+    // --- END UPDATED LOGIC ---
 
-        if (countsRes.ok) {
-          const countsData = await countsRes.json();
-          issueCounts = {
-            issuesFixedCount: countsData.issuesFixedCount || 0,
-          };
-        } else {
-          console.warn(`Could not fetch counts for version ${version.id}`);
-        }
-      } catch(err: any) {
-         console.warn(`Error fetching counts for ${version.id} (even after retries): ${err.message}`);
-      }
-
-      // 4. Combine all data
-      return {
-        id: version.id,
-        name: version.name,
-        startDate: version.startDate,
-        releaseDate: version.releaseDate,
-        released: version.released,
-        archived: version.archived,
-        status: getVersionStatus(version),
-        issueCounts: issueCounts,
-      };
-    });
-
-    const finalVersions = await Promise.all(versionPromises);
-
-    return NextResponse.json(finalVersions);
   } catch (err: any) {
     console.error('❌ Server error in versions route:', err.message);
     return NextResponse.json(

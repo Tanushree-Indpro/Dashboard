@@ -1,6 +1,6 @@
-'use client'; // <-- This directive is critical here
+'use client';
 
-import React, { useMemo } from 'react'; // We don't need 'use'
+import React, { useMemo } from 'react';
 import useSWR from 'swr';
 import Link from 'next/link';
 import {
@@ -16,6 +16,7 @@ import {
   Construction,
   XCircle,
   CheckCircle2,
+  List, // <-- Button icon included
 } from 'lucide-react';
 
 // ---------- Types ----------
@@ -94,7 +95,6 @@ const IssueStatusBadge = ({ status }: { status: string }) => {
 
 
 // ---------- Page Component ----------
-// This component receives simple strings as props, not promises
 export default function VersionPageClient({ projectKey, versionId }: {
   projectKey: string;
   versionId: string;
@@ -105,7 +105,6 @@ export default function VersionPageClient({ projectKey, versionId }: {
     error, 
     isLoading 
   } = useSWR<ApiVersionResponse>(
-    // The props are now plain strings, so this works
     projectKey && versionId ? `/api/projects/${projectKey}/versions/${versionId}` : null,
     fetcher
   );
@@ -180,7 +179,7 @@ export default function VersionPageClient({ projectKey, versionId }: {
         </nav>
 
         {/* --- Header --- */}
-        <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
+        <header className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-8">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">{data.version.name}</h1>
             <div className="flex items-center gap-4 text-slate-600 mt-2">
@@ -190,7 +189,20 @@ export default function VersionPageClient({ projectKey, versionId }: {
               </span>
             </div>
           </div>
-          <VersionStatus status={data.version.status} />
+          
+          {/* --- "See Other Versions" Button Included --- */}
+          <div className="flex flex-col sm:flex-row-reverse md:flex-col items-start sm:items-end md:items-end gap-3 flex-shrink-0">
+             <VersionStatus status={data.version.status} />
+             <Link
+                href={`/projects/${projectKey}/versions`}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50"
+             >
+                <List className="w-4 h-4" />
+                <span>See Other Versions</span>
+             </Link>
+          </div>
+          {/* --- END OF SECTION --- */}
+
         </header>
 
         {/* --- Stats Section --- */}
