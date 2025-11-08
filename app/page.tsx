@@ -1,8 +1,13 @@
 /*
   File: app/page.tsx
   Highlights:
-  - CHANGED (Line 217): Added new logic to sort versions and find the *true* latest version.
-  - CHANGED (Line 256): Added 'relative z-10' to fix CSS stacking issue.
+  - LOGIC REVERT (Lines 83-146): Reverted 'getVersionBasedHealth'
+    back to the "fallback" logic.
+  - This logic prioritizes 'latestVersion.issueCounts' first.
+    (This will fix MediCarePro).
+  - If 'latestVersion.issueCounts' is not available, it
+    falls back to using the project-wide 'taskCounts'.
+    (This will show progress for other projects).
 */
 
 'use client';
@@ -48,8 +53,8 @@ interface ProjectHealth {
   progress: number;
   totalProjectIssues: number;
   blocked: number;
-  versionFixed: number;
-  versionTotal: number;
+  versionFixed: number; // For display in release block
+  versionTotal: number; // For display in release block
 }
 
 // Type for the final, enriched API project
@@ -58,7 +63,7 @@ interface ApiProject {
   key: string;
   name: string;
   lead: { displayName: string } | null;
-  taskCounts?: { total: number; counts: Record<string, number> };
+  taskCounts: { total: number; counts: Record<string, number> }; // Now required
   latestVersion?: JiraVersion;
   members: number;
   health: ProjectHealth;
@@ -90,26 +95,71 @@ const formatDate = (d?: string) => {
   }
 };
 
-// Calculate project health based on version data
+// --- LOGIC REVERT: This function now uses the "fallback" logic ---
+// File: app/page.tsx
+// ... (keep all other code in the file)
+
+// --- THIS IS THE UPDATED FUNCTION ---
 const getVersionBasedHealth = (
   taskCounts: { total: number; counts: Record<string, number> },
   latestVersion?: JiraVersion
 ): ProjectHealth => {
+  let progress: number;
+  let versionFixed: number;
+  let versionTotal: number;
+
+  // Get project-wide totals (for 'blocked' and the bottom 'Issues' stat)
   const totalProjectIssues = taskCounts?.total ?? 0;
-  const blocked = taskCounts?.counts?.Blocked ?? taskCounts?.counts?.blocked ?? 0;
-  const versionTotal = latestVersion?.issueCounts?.issuesFixedCount ?? 0;
   const counts = taskCounts?.counts ?? {};
-  const versionFixed = (counts.Done ?? counts.done ?? 0) + (counts.Fixed ?? counts.fixed ?? 0);
-  const progress = versionTotal > 0 ? Math.round((versionFixed / versionTotal) * 100) : 0;
+
+  // Check if we have specific issue counts for the LATEST version
+  const hasVersionCounts =
+    latestVersion?.issueCounts &&
+    typeof latestVersion.issueCounts.totalIssues === 'number' &&
+    typeof latestVersion.issueCounts.issuesFixedCount === 'number';
+
+  if (hasVersionCounts) {
+    // --- PATH 1: Use Version-Specific Data ---
+    // Use the data from the latestVersion.issueCounts for the
+    // release block text AND the main progress bar.
+    versionFixed = latestVersion!.issueCounts!.issuesFixedCount!;
+    versionTotal = latestVersion!.issueCounts!.totalIssues!;
+    
+    // Calculate progress based on the VERSION
+    progress =
+      versionTotal > 0
+        ? Math.round((versionFixed / versionTotal) * 100)
+        : 0;
+  } else {
+    // --- PATH 2: NO Version Data (YOUR REQUESTED CHANGE) ---
+    // If no version-specific data exists, set progress and counts to 0.
+    versionFixed = 0;
+    versionTotal = 0;
+    progress = 0;
+  }
+
+  // --- COMMON LOGIC ---
+  // Blocked count is always project-wide
+  const blocked = (counts['Blocked'] ?? 0) + (counts['blocked'] ?? 0);
 
   let status: 'Healthy' | 'At Risk' | 'Critical' = 'Healthy';
-
-  // A project is considered Critical if:
+  
+  // Health status is now based on the correct progress (0 if no version)
   if (progress < 40 || blocked >= 5) status = 'Critical';
   else if (progress < 70 || blocked >= 2) status = 'At Risk';
 
-  return { status, progress, totalProjectIssues, blocked, versionFixed, versionTotal };
+  return {
+    status,
+    progress,           // This will be 0 if no version data
+    totalProjectIssues, // This is *always* project-wide, for the bottom stat
+    blocked,
+    versionFixed,       // This will be 0 if no version data
+    versionTotal,       // This will be 0 if no version data
+  };
 };
+// --- END OF UPDATED FUNCTION ---
+
+// ... (rest of your app/page.tsx file)--- END OF LOGIC REVERT ---
 
 // Component to display version status
 const VersionStatus = ({ status }: { status?: string }) => {
@@ -142,31 +192,52 @@ const VersionStatus = ({ status }: { status?: string }) => {
   );
 };
 
+// --- ADDED: Tooltip Component ---
+const Tooltip = ({
+  children,
+  content,
+}: {
+  children: React.ReactNode;
+  content: string;
+}) => {
+  return (
+    <div className="relative group">
+      {children}
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-900 text-white text-xs font-medium rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 pointer-events-none">
+        {content}
+        {/* Tooltip arrow */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-gray-900"></div>
+      </div>
+    </div>
+  );
+};
+// --- END OF ADDITION ---
+
 // ---------- UI Component ----------
 export default function Home() {
   const [filterStatus, setFilterStatus] = useState<
     'all' | 'Healthy' | 'At Risk' | 'Critical'
   >('all');
 
-  // Fetch projects, tasks, versions, and users
-  const { data: projects, error, isLoading } = useSWR<
-    Omit<ApiProject, 'taskCounts' | 'latestVersion' | 'members' | 'health'>[]
+  // Fetch projects (which now *includes* taskCounts), versions, and users
+  // --- PERFORMANCE FIX 1: Updated SWR type to accept 'taskCounts' ---
+  const {
+    data: projects,
+    error,
+    isLoading,
+  } = useSWR<
+    (Omit<ApiProject, 'latestVersion' | 'members' | 'health'> & {
+      taskCounts: { total: number; counts: Record<string, number> };
+    })[]
   >('/api/projects', fetcher, {
     refreshInterval: 30 * 60 * 1000, // 30 minutes refresh
     revalidateOnFocus: false,
   });
 
   const projectKeys = projects?.map((p) => p.key) ?? [];
-  const { data: tasksArray } = useSWR(
-    projectKeys.length ? projectKeys.map((k) => `/api/projects/${k}/tasks`) : null,
-    async (urls: string[]) => {
-      const res = await Promise.all(
-        urls.map((u) => fetcher(u).catch(() => ({ total: 0, counts: {} })))
-      );
-      return res;
-    },
-    { refreshInterval: 60 * 1000 }
-  );
+
+  // --- PERFORMANCE FIX 2: Removed the redundant SWR hook for 'tasksArray' ---
+  // The data it fetched is already included in the '/api/projects' call.
 
   const { data: versionsArray } = useSWR(
     projectKeys.length
@@ -198,9 +269,10 @@ export default function Home() {
   const enrichedProjects = useMemo((): ApiProject[] => {
     if (!projects) return [];
     return projects.map((p, i) => {
-      const taskData = tasksArray?.[i] ?? { total: 0, counts: {} };
+      // --- PERFORMANCE FIX 3: Get taskData from 'p' directly ---
+      const taskData = p.taskCounts ?? { total: 0, counts: {} };
       const versions: JiraVersion[] = versionsArray?.[i] ?? [];
-      
+
       // --- FIX 2: ROBUST VERSION SORTING ---
       // Filter out archived versions and sort by release/start date
       // to find the most recent, relevant version.
@@ -222,9 +294,11 @@ export default function Home() {
         ? sortedVersions[sortedVersions.length - 1]
         : undefined;
       // --- END OF FIX ---
-      
+
       const userList: JiraUser[] = usersArray?.[i] ?? [];
       const members = userList.length;
+
+      // --- LOGIC UPDATE: 'getVersionBasedHealth' now uses the correct logic ---
       const health = getVersionBasedHealth(taskData, latestVersion);
 
       return {
@@ -235,7 +309,8 @@ export default function Home() {
         health,
       };
     });
-  }, [projects, tasksArray, versionsArray, usersArray]);
+    // --- PERFORMANCE FIX 4: Removed 'tasksArray' from dependency array ---
+  }, [projects, versionsArray, usersArray]);
 
   // Calculate header stats
   const stats = useMemo(() => {
@@ -321,9 +396,12 @@ export default function Home() {
             <div className="bg-white rounded-lg p-5 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 mb-1">
-                    Total Projects
-                  </p>
+                  {/* --- ADDED: Tooltip --- */}
+                  <Tooltip content="All projects being tracked">
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      Total Projects
+                    </p>
+                  </Tooltip>
                   <p className="text-2xl font-bold text-gray-900">
                     {stats.total}
                   </p>
@@ -337,9 +415,12 @@ export default function Home() {
             <div className="bg-white rounded-lg p-5 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 mb-1">
-                    Healthy
-                  </p>
+                  {/* --- ADDED: Tooltip --- */}
+                  <Tooltip content="Progress > 70% and < 2 blocked issues">
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      Healthy
+                    </p>
+                  </Tooltip>
                   <p className="text-2xl font-bold text-emerald-600">
                     {stats.healthy}
                   </p>
@@ -353,9 +434,12 @@ export default function Home() {
             <div className="bg-white rounded-lg p-5 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 mb-1">
-                    At Risk
-                  </p>
+                  {/* --- ADDED: Tooltip --- */}
+                  <Tooltip content="Progress < 70% or >= 2 blocked issues">
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      At Risk
+                    </p>
+                  </Tooltip>
                   <p className="text-2xl font-bold text-amber-600">
                     {stats.atRisk}
                   </p>
@@ -369,9 +453,12 @@ export default function Home() {
             <div className="bg-white rounded-lg p-5 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600 mb-1">
-                    Critical
-                  </p>
+                  {/* --- ADDED: Tooltip --- */}
+                  <Tooltip content="Progress < 40% or >= 5 blocked issues">
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      Critical
+                    </p>
+                  </Tooltip>
                   <p className="text-2xl font-bold text-red-600">
                     {stats.critical}
                   </p>
@@ -463,11 +550,11 @@ export default function Home() {
             {filteredProjects.map((p, index) => {
               const {
                 status,
-                progress,
-                totalProjectIssues,
+                progress, // <-- This is now from the LATEST VERSION (if avail)
+                totalProjectIssues, // <-- This is the project-wide total
                 blocked,
-                versionFixed,
-                versionTotal,
+                versionFixed, // <-- This is from the LATEST VERSION (if avail)
+                versionTotal, // <-- This is from the LATEST VERSION (if avail)
               } = p.health;
               const latest = p.latestVersion;
 
@@ -505,17 +592,28 @@ export default function Home() {
                             </span>
                           </div>
                         </div>
-                        <div
-                          className={`px-2 py-1 rounded-md text-xs font-semibold ${
+                        {/* --- ADDED: Tooltip --- */}
+                        <Tooltip
+                          content={
                             status === 'Healthy'
-                              ? 'bg-emerald-100 text-emerald-700'
+                              ? 'Progress > 70% and < 2 blocked'
                               : status === 'At Risk'
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}
+                              ? 'Progress < 70% or >= 2 blocked'
+                              : 'Progress < 40% or >= 5 blocked'
+                          }
                         >
-                          {status}
-                        </div>
+                          <div
+                            className={`px-2 py-1 rounded-md text-xs font-semibold ${
+                              status === 'Healthy'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : status === 'At Risk'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-red-100 text-red-700'
+                            }`}
+                          >
+                            {status}
+                          </div>
+                        </Tooltip>
                       </div>
 
                       {/* Latest Version Block */}
@@ -538,10 +636,12 @@ export default function Home() {
                                   {formatDate(latest.startDate)} →{' '}
                                   {formatDate(latest.releaseDate)}
                                 </div>
+                                {/* --- This will now show the version-specific counts (or project fallback) --- */}
                                 <div className="text-xs text-slate-500 mt-1">
                                   Issues:{' '}
                                   <span className="font-medium text-slate-700">
-                                    {versionFixed} / {versionTotal > 0 ? versionTotal : '?'}
+                                    {versionFixed} /{' '}
+                                    {versionTotal > 0 ? versionTotal : '?'}
                                   </span>
                                 </div>
                               </div>
@@ -560,7 +660,7 @@ export default function Home() {
                         Other Project Details
                       </h4>
 
-                      {/* Progress Bar */}
+                      {/* Progress Bar --- This now shows the version-specific progress (or project fallback) --- */}
                       <div className="mt-4">
                         <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
                           <span className="font-medium text-gray-600">
@@ -611,12 +711,13 @@ export default function Home() {
                         <TrendingUp className="w-4 h-4 text-gray-400 flex-shrink-0" />
                         <div className="min-w-0">
                           <p className="text-xs text-gray-500">Issues</p>
+                          {/* This is the total project issue count */}
                           <p className="text-xs font-medium text-gray-900">
                             {totalProjectIssues}
                           </p>
                         </div>
                       </div>
-                      
+
                       {/* --- "Data Collection" BUTTON --- */}
                       <div className="flex items-center">
                         <Link
@@ -628,7 +729,6 @@ export default function Home() {
                         </Link>
                       </div>
                       {/* --- END OF CHANGE --- */}
-
                     </div>
                   </article>
                 </motion.div>

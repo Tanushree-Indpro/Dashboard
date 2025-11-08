@@ -1,5 +1,10 @@
 /*
   File: app/api/projects/[projectKey]/all-issues/route.ts
+  Highlights:
+  - FIXED (Line 77-94): Changed the API call from GET to POST.
+    The /search/jql endpoint requires a POST request with the
+    JQL in the body. This fixes the bug that would break the
+    'Data Collection' page.
 */
 
 import { NextResponse } from 'next/server';
@@ -18,7 +23,9 @@ async function fetchWithRetry(
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`Jira API Error: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Jira API Error: ${response.status} ${response.statusText}`
+      );
     }
     return response;
   } catch (error: any) {
@@ -59,22 +66,35 @@ export async function GET(
     const authHeaders = {
       Authorization: `Basic ${auth}`,
       Accept: 'application/json',
+      'Content-Type': 'application/json', // Added for POST
     };
 
     const jql = `project = "${projectKey}" AND issuetype IN (Task, Story, Epic)`;
-    const fields = 'summary,status,issuetype,priority,assignee,created,updated';
+    const fields = [
+      'summary',
+      'status',
+      'issuetype',
+      'priority',
+      'assignee',
+      'created',
+      'updated',
+    ];
 
-    // --- THE FIX ---
-    // Added /jql after /search
-    const searchUrl = `${JIRA_BASE_URL}/rest/api/3/search/jql?jql=${encodeURIComponent(
-      jql
-    )}&fields=${fields}&maxResults=1000`;
-    // --- END OF FIX ---
+    // --- THE FIX: Use POST for /search/jql ---
+    const searchUrl = `${JIRA_BASE_URL}/rest/api/3/search/jql`;
+    const body = {
+      jql: jql,
+      fields: fields,
+      maxResults: 1000,
+    };
 
     const response = await fetchWithRetry(searchUrl, {
+      method: 'POST', // <-- Must be POST
       headers: authHeaders,
+      body: JSON.stringify(body), // <-- JQL goes in the body
       cache: 'no-store',
     });
+    // --- END OF FIX ---
 
     const data = await response.json();
 
@@ -90,7 +110,6 @@ export async function GET(
     }));
 
     return NextResponse.json(issues);
-
   } catch (error: any) {
     console.error(`Error fetching all issues for ${projectKey}:`, error.message);
     return NextResponse.json(
